@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Night Flower Garden</title>
+
+<audio controls>
+  <source src="ssstik.io_1777186912502.mp3" type="audio/mpeg">
+</audio>
+
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #020808; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, gY;
+
+function resize() {
+  W = canvas.width = innerWidth;
+  H = canvas.height = innerHeight;
+  gY = H * 0.82;
+}
+resize();
+addEventListener('resize', resize);
+
+// --- Easing ---
+const easeOut3 = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+};
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// --- Floating ambient particles ---
+const PART = Array.from({ length: 80 }, () => ({
+  x: Math.random(),
+  y: Math.random(),
+  sz: 0.7 + Math.random() * 2.5,
+  spd: 0.006 + Math.random() * 0.016,
+  drft: (Math.random() - 0.5) * 0.003,
+  a: 0.12 + Math.random() * 0.45,
+  dia: Math.random() > 0.35,
+  tp: Math.random() * Math.PI * 2,
+  ts: 0.3 + Math.random() * 0.6
+}));
+
+// --- Sparkle particles near flowers ---
+const SPARKS = Array.from({ length: 22 }, (_, i) => ({
+  fi: i % 3,
+  ox: (Math.random() - 0.5) * 180,
+  oy: (Math.random() - 0.5) * 90,
+  sz: 1.0 + Math.random() * 2.5,
+  life: Math.random(),
+  ml: 1.5 + Math.random() * 3.0,
+  yellow: Math.random() > 0.38
+}));
+
+// --- Flower definitions (ox/oy/hf are fractions of W/H) ---
+const FLOWERS = [
+  { ox: -0.18, oy: 0.025, hf: 0.230, sc: 0.85, d: 0.45, sf: 0.75, sa: 6, sp: 1.2 },
+  { ox:  0.02, oy: 0.000, hf: 0.290, sc: 1.00, d: 0.00, sf: 0.60, sa: 5, sp: 0.0 },
+  { ox:  0.17, oy: 0.018, hf: 0.250, sc: 0.90, d: 0.65, sf: 0.82, sa: 7, sp: 2.4 },
+];
+
+// --- Grass blades (ox fraction of W, hf fraction of H) ---
+const GRASS = [
+  // Left cluster
+  { ox: -0.44, hf: 0.200, w: 3.5, cv:  18, c: '#288020' },
+  { ox: -0.40, hf: 0.250, w: 4.5, cv: -14, c: '#369828' },
+  { ox: -0.36, hf: 0.180, w: 3.0, cv:  24, c: '#288020' },
+  { ox: -0.32, hf: 0.220, w: 3.5, cv:   8, c: '#44b038' },
+  { ox: -0.47, hf: 0.155, w: 2.5, cv:  10, c: '#288020' },
+  { ox: -0.28, hf: 0.185, w: 3.0, cv:  -5, c: '#369828' },
+  { ox: -0.49, hf: 0.125, w: 2.0, cv:   6, c: '#44b038' },
+  { ox: -0.25, hf: 0.145, w: 2.0, cv: -10, c: '#288020' },
+  // Right cluster
+  { ox:  0.24, hf: 0.145, w: 2.0, cv: -10, c: '#288020' },
+  { ox:  0.27, hf: 0.175, w: 3.0, cv:   5, c: '#44b038' },
+  { ox:  0.30, hf: 0.210, w: 3.5, cv:  -8, c: '#369828' },
+  { ox:  0.34, hf: 0.180, w: 3.0, cv: -24, c: '#288020' },
+  { ox:  0.37, hf: 0.245, w: 4.5, cv:  14, c: '#369828' },
+  { ox:  0.40, hf: 0.200, w: 3.5, cv: -18, c: '#288020' },
+  { ox:  0.44, hf: 0.125, w: 2.0, cv:  -6, c: '#44b038' },
+  { ox:  0.22, hf: 0.130, w: 2.0, cv:   5, c: '#288020' },
+];
+
+// --- Base leaf cluster definitions ---
+const BASE_LEAVES = [
+  { dx: -52, dy: 14, rx: 22, ry: 13, a: -0.40 },
+  { dx:  52, dy: 14, rx: 22, ry: 13, a:  0.40 },
+  { dx: -26, dy: 22, rx: 20, ry: 12, a: -0.80 },
+  { dx:  26, dy: 22, rx: 20, ry: 12, a:  0.80 },
+  { dx:   0, dy: 27, rx: 18, ry: 11, a:  0.00 },
+  { dx: -76, dy:  9, rx: 18, ry: 11, a: -0.28 },
+  { dx:  76, dy:  9, rx: 18, ry: 11, a:  0.28 },
+  { dx: -98, dy: 14, rx: 15, ry:  9, a: -0.48 },
+  { dx:  98, dy: 14, rx: 15, ry:  9, a:  0.48 },
+];
+
+// === Drawing helpers ===
+
+function drawBG() {
+  ctx.fillStyle = '#030d0b';
+  ctx.fillRect(0, 0, W, H);
+  const g = ctx.createRadialGradient(W * 0.5, H * 0.58, 0, W * 0.5, H * 0.58, W * 0.62);
+  g.addColorStop(0,    'rgba(14, 52, 46, 0.90)');
+  g.addColorStop(0.42, 'rgba(6, 24, 20, 0.45)');
+  g.addColorStop(1,    'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function tickParticles(dt) {
+  PART.forEach(p => {
+    p.y -= p.spd * dt;
+    p.x += p.drft * dt;
+    p.tp += p.ts * dt;
+    if (p.y < -0.02) { p.y = 1.02; p.x = Math.random(); }
+    if (p.x < 0) p.x = 1;
+    if (p.x > 1) p.x = 0;
+
+    const twk = 0.58 + 0.42 * Math.sin(p.tp);
+    const px = p.x * W, py = p.y * H;
+
+    ctx.save();
+    ctx.globalAlpha = p.a * twk;
+    ctx.fillStyle = '#4dd8c6';
+    if (p.dia) {
+      ctx.translate(px, py);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-p.sz * 0.5, -p.sz * 0.5, p.sz, p.sz);
+    } else {
+      ctx.beginPath();
+      ctx.arc(px, py, p.sz * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+}
+
+function drawPetal(cx, cy, angle, len, wid, col) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo( wid * 0.58, -len * 0.12, wid * 0.46, -len * 0.86, 0, -len);
+  ctx.bezierCurveTo(-wid * 0.46, -len * 0.86, -wid * 0.58, -len * 0.12, 0, 0);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawLeaf(cx, cy, angle, sz, col, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo( sz * 0.38, -sz * 0.18, sz * 0.30, -sz * 0.78, 0, -sz);
+  ctx.bezierCurveTo(-sz * 0.30, -sz * 0.78, -sz * 0.38, -sz * 0.18, 0, 0);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFlowerHead(cx, cy, sc, bp) {
+  const pl = 30 * sc * bp;
+  const pw = 20 * sc * bp;
+  const cr = 11 * sc * bp;
+
+  // Ambient glow halo
+  const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, pl * 2.5);
+  halo.addColorStop(0,   'rgba(100, 224, 214, 0.13)');
+  halo.addColorStop(0.5, 'rgba(80, 200, 190, 0.05)');
+  halo.addColorStop(1,   'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(cx, cy, pl * 2.5, 0, Math.PI * 2); ctx.fill();
+
+  // Back petals (offset, darker)
+  for (let i = 0; i < 6; i++) {
+    drawPetal(cx, cy, (i / 6) * Math.PI * 2 + Math.PI / 6, pl * 0.86, pw * 0.80, '#2aaba2');
+  }
+  // Front petals
+  for (let i = 0; i < 6; i++) {
+    drawPetal(cx, cy, (i / 6) * Math.PI * 2, pl, pw, '#5dd9d0');
+  }
+
+  // White center base
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, cr * 1.18, cr * 0.70, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#d4f0ec';
+  ctx.fill();
+
+  // White glow
+  const cg = ctx.createRadialGradient(cx, cy - cr * 0.12, 0, cx, cy, cr * 1.4);
+  cg.addColorStop(0,    'rgba(255, 255, 255, 0.98)');
+  cg.addColorStop(0.45, 'rgba(228, 248, 244, 0.55)');
+  cg.addColorStop(1,    'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.ellipse(cx, cy, cr * 1.38, cr * 0.80, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Yellow center
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, cr * 0.60, cr * 0.36, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#e8b818';
+  ctx.fill();
+}
+
+function drawFlower(f, prog, t) {
+  if (prog <= 0) return;
+  const cx = W / 2 + f.ox * W;
+  const by = gY + f.oy * H;
+  const sh = f.hf * H;
+  const sc = f.sc;
+  const gp = easeOut3(clamp(prog, 0, 1));
+  const ch = sh * gp;
+  const sway = Math.sin(t * f.sf + f.sp) * f.sa;
+  const tx = cx + sway, ty = by - ch;
+  const mx = cx + sway * 0.48, my = by - ch * 0.5;
+
+  // Stem
+  ctx.beginPath();
+  ctx.moveTo(cx, by);
+  ctx.quadraticCurveTo(mx, my, tx, ty);
+  ctx.strokeStyle = '#25a090';
+  ctx.lineWidth = 4 * sc;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Lower leaf pair (at 47% height)
+  if (gp > 0.18) {
+    const la = clamp((gp - 0.18) / 0.38, 0, 1);
+    const lf = 0.47;
+    const lx = cx + sway * lf * 0.75;
+    const ly = by - ch * lf;
+    drawLeaf(lx, ly, -Math.PI * 0.33, 26 * sc, '#1a9288', la);
+    drawLeaf(lx, ly,  Math.PI * 0.33, 26 * sc, '#1a9288', la);
+  }
+
+  // Upper leaf pair (at 71% height)
+  if (gp > 0.42) {
+    const la = clamp((gp - 0.42) / 0.35, 0, 1);
+    const lf = 0.71;
+    const lx = cx + sway * lf * 0.85;
+    const ly = by - ch * lf;
+    drawLeaf(lx, ly, -Math.PI * 0.26, 18 * sc, '#1a9288', la);
+    drawLeaf(lx, ly,  Math.PI * 0.26, 18 * sc, '#1a9288', la);
+  }
+
+  // Flower head blooms at top
+  if (gp > 0.74) {
+    const raw = (gp - 0.74) / 0.26;
+    const bp  = clamp(easeOutBack(raw), 0, 1.06);
+    drawFlowerHead(tx, ty, sc, bp);
+  }
+}
+
+function drawBaseLeaves(prog) {
+  if (prog <= 0) return;
+  const p  = easeOut3(clamp(prog, 0, 1));
+  const sc = clamp(Math.min(W, H) * 0.0014, 0.55, 2.5);
+  const cx = W / 2 + 0.015 * W;
+  const cy = gY + 0.022 * H;
+
+  BASE_LEAVES.forEach((l, i) => {
+    const lp = clamp(p * 2.2 - i * 0.18, 0, 1);
+    if (lp <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = lp * 0.90;
+    ctx.translate(cx + l.dx * sc, cy + l.dy * sc);
+    ctx.rotate(l.a);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, l.rx * sc, l.ry * sc, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#12706a';
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawGrass(prog) {
+  if (prog <= 0) return;
+  const p  = easeOut3(clamp(prog, 0, 1));
+  const cx = W / 2;
+
+  GRASS.forEach(b => {
+    const bx = cx + b.ox * W;
+    const bh = b.hf * H * p;
+    ctx.beginPath();
+    ctx.moveTo(bx, gY);
+    ctx.quadraticCurveTo(
+      bx + b.cv * 0.55, gY - bh * 0.58,
+      bx + b.cv * p,    gY - bh
+    );
+    ctx.lineWidth   = b.w;
+    ctx.strokeStyle = b.c;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+  });
+}
+
+function tickSparks(dt, flElapsed, t) {
+  const show  = flElapsed > 1.4;
+  if (!show) return;
+  const alpha = clamp((flElapsed - 1.4) / 1.0, 0, 1);
+
+  SPARKS.forEach(sp => {
+    sp.life += dt;
+    if (sp.life > sp.ml) {
+      sp.life = 0;
+      sp.fi   = Math.floor(Math.random() * 3);
+      sp.ox   = (Math.random() - 0.5) * 200;
+      sp.oy   = (Math.random() - 0.5) * 100;
+    }
+    const fp = sp.life / sp.ml;
+    const a  = Math.sin(fp * Math.PI) * 0.88 * alpha;
+    const f  = FLOWERS[sp.fi];
+    const fx = W / 2 + f.ox * W + Math.sin(t * f.sf + f.sp) * f.sa * 0.4;
+    const fy = gY - f.hf * H * 0.65;
+    const sx = fx + sp.ox;
+    const sy = fy + sp.oy - fp * 75;
+    const col = sp.yellow ? '#eeb818' : '#88f5ea';
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    if (sp.yellow) {
+      const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, sp.sz * 4.5);
+      sg.addColorStop(0, 'rgba(238,184,24,0.75)');
+      sg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = sg;
+      ctx.beginPath(); ctx.arc(sx, sy, sp.sz * 4.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(sx, sy, sp.sz, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+}
+
+// === Main animation loop ===
+const FL_START = 1.6;
+const FL_DUR   = 3.8;
+const GR_START = FL_START + 2.0;
+const GR_DUR   = 2.2;
+const BL_START = FL_START + 0.25;
+const BL_DUR   = 2.0;
+
+let t0 = null, tLast = null;
+
+function frame(ts) {
+  if (!t0)    t0    = ts;
+  if (!tLast) tLast = ts;
+  const elapsed = (ts - t0)    * 0.001;
+  const dt      = (ts - tLast) * 0.001;
+  tLast = ts;
+
+  ctx.clearRect(0, 0, W, H);
+
+  drawBG();
+  tickParticles(dt);
+
+  // Grass (grows after flowers start)
+  const grP = Math.max(0, (elapsed - GR_START) / GR_DUR);
+  drawGrass(grP);
+
+  // Base leaf cluster
+  const blP = Math.max(0, (elapsed - BL_START) / BL_DUR);
+  drawBaseLeaves(blP);
+
+  // Flowers
+  const flElapsed = elapsed - FL_START;
+  FLOWERS.forEach(f => {
+    const fp = Math.max(0, (flElapsed - f.d) / FL_DUR);
+    drawFlower(f, fp, elapsed);
+  });
+
+  // Sparkles
+  tickSparks(dt, flElapsed, elapsed);
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+  </html>
+  
